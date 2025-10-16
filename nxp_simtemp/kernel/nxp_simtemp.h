@@ -5,6 +5,21 @@
 #undef pr_fmt
 #define pr_fmt(fmt) "%s : " fmt, __func__
 
+#define TEMP_SAMPLE_BUF_SIZE 4
+
+struct simtemp_sample {
+	__u64 timestamp_ns; // monotonic timestamp
+	__s32 temp_mC; // milli-degree Celsius (e.g., 44123 = 44.123 °C)
+	__u32 flags; // bit0=NEW_SAMPLE, bit1=THRESHOLD_CROSSED
+} __attribute__((packed));
+typedef struct simtemp_sample simtemp_sample_t;
+
+typedef struct simtemp_ring_buff {
+	simtemp_sample_t readings[TEMP_SAMPLE_BUF_SIZE];
+	unsigned int head; // next write position
+	unsigned int tail; // next read position
+} simtemp_ring_buff_t;
+
 /* Mode codes */
 typedef enum simtemp_mode_code {
 	NORMAL,
@@ -22,8 +37,8 @@ typedef struct simtemp_plat_data {
 /*Device private data structure */
 typedef struct simtemp_dev_priv_data {
 	simtemp_plat_data_t pdata;
-	char *buffer;
-    dev_t dev_num;
+	simtemp_ring_buff_t *buffer;
+	dev_t dev_num;
 	struct cdev cdev;
 	struct class *class_simtemp;
 	struct device *device_simtemp;

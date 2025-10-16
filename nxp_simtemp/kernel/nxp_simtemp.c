@@ -3,11 +3,14 @@
 #include <linux/device.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
-
-#define DEVICE_BUFF_SIZE 1024
+#include <linux/workqueue.h>
+#include <linux/timekeeping.h>
 
 /* Device private data */
-simtemp_dev_priv_data_t dev_data;
+static simtemp_dev_priv_data_t dev_data;
+
+/* Work struct for periodic readings */
+static struct delayed_work simtemp_work;
 
 /* file operations of the driver (for now dummy ones)*/
 struct file_operations simtemp_fops = { .open = simtemp_open,
@@ -57,6 +60,37 @@ int simtemp_release(struct inode *inode, struct file *flip)
 	return 0;
 }
 
+/* Work handler code */
+void save_reading(simtemp_ring_buff_t *rb, simtemp_sample_t *sample)
+{
+	pr_info("Save triggered: timestamp_ns=%llu, temp_mC=%d\n",
+		sample->timestamp_ns, sample->temp_mC);
+
+	rb->readings[rb->head] = *sample;
+	rb->head = (rb->head + 1) % TEMP_SAMPLE_BUF_SIZE;
+
+	/* Move tail if buffer is full */
+	if (rb->head == rb->tail) {
+		rb->tail = (rb->tail + 1) % TEMP_SAMPLE_BUF_SIZE;
+	}
+}
+
+static void simtemp_work_handler(struct work_struct *work)
+{
+	pr_info("Worker callback triggered\n");
+	ktime_t kt = ktime_get();
+
+	simtemp_sample_t sample = { .timestamp_ns = kt,
+				    .temp_mC = 25000,
+				    .flags = 0 };
+
+	save_reading(dev_data.buffer, &sample);
+
+	/* For periodic callback */
+	schedule_delayed_work(&simtemp_work,
+			      msecs_to_jiffies(dev_data.pdata.sampling_ms));
+}
+
 /* Called when matched platform device is found */
 int simtemp_platform_driver_probe(struct platform_device *pdev)
 {
@@ -82,9 +116,9 @@ int simtemp_platform_driver_probe(struct platform_device *pdev)
 	pr_info("Device threshold_mC = %d\n", dev_data.pdata.threshold_mC);
 	pr_info("Device mode = %d\n", dev_data.pdata.mode);
 
-	/*Dynamically allocate memory for the device buffer */
+	/* Dynamically allocate memory for the device buffer */
 	dev_data.buffer =
-		devm_kzalloc(&pdev->dev, DEVICE_BUFF_SIZE, GFP_KERNEL);
+		devm_kzalloc(&pdev->dev, sizeof(*dev_data.buffer), GFP_KERNEL);
 	if (!dev_data.buffer) {
 		pr_info("Cannot allocate memory \n");
 		return -ENOMEM;
@@ -114,6 +148,15 @@ int simtemp_platform_driver_probe(struct platform_device *pdev)
 		return ret;
 	}
 
+	INIT_DELAYED_WORK(&simtemp_work, simtemp_work_handler);
+	if (!schedule_delayed_work(
+		    &simtemp_work,
+		    msecs_to_jiffies(dev_data.pdata.sampling_ms))) {
+		pr_err("Schedule delayed work failed\n");
+		cdev_del(&dev_data.cdev);
+		return -EPERM;
+	}
+
 	pr_info("Probe was successful\n");
 
 	return 0;
@@ -122,10 +165,13 @@ int simtemp_platform_driver_probe(struct platform_device *pdev)
 /* Called when the device is removed from the system */
 void simtemp_platform_driver_remove(struct platform_device *pdev)
 {
-	/*1. Remove a device that was created with device_create() */
+	/* Remove periodic callback */
+	cancel_delayed_work_sync(&simtemp_work);
+
+	/* Remove a device that was created with device_create() */
 	device_destroy(dev_data.class_simtemp, dev_data.dev_num);
 
-	/*2. Remove a cdev entry from the system*/
+	/* Remove a cdev entry from the system*/
 	cdev_del(&dev_data.cdev);
 
 	pr_info("A device is removed\n");
