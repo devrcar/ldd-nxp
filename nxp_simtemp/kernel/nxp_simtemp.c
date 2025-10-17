@@ -2,9 +2,11 @@
 #include <linux/cdev.h>
 #include <linux/device.h>
 #include <linux/module.h>
+#include <linux/fs.h>
 #include <linux/platform_device.h>
 #include <linux/workqueue.h>
 #include <linux/timekeeping.h>
+#include <linux/mutex.h>
 
 /* Device private data */
 static simtemp_dev_priv_data_t dev_data;
@@ -12,43 +14,75 @@ static simtemp_dev_priv_data_t dev_data;
 /* Work struct for periodic readings */
 static struct delayed_work simtemp_work;
 
+/* lock for temperature buffer access */
+static DEFINE_MUTEX(read_access);
+
 /* file operations of the driver (for now dummy ones)*/
 struct file_operations simtemp_fops = { .open = simtemp_open,
 					.release = simtemp_release,
 					.read = simtemp_read,
 					.write = simtemp_write,
-					.llseek = simtemp_lseek,
+					.llseek = noop_llseek,
 					.owner = THIS_MODULE };
-
-loff_t simtemp_lseek(struct file *filp, loff_t offset, int whence)
-{
-	pr_info("lseek requested \n");
-	pr_info("Current value of the file position = %lld\n", filp->f_pos);
-
-	return filp->f_pos;
-}
 
 ssize_t simtemp_read(struct file *filp, char __user *buff, size_t count,
 		     loff_t *f_pos)
 {
 	pr_info("Read requested for %zu bytes \n", count);
-	pr_info("Current file position = %lld\n", *f_pos);
 
-	return 0;
+	simtemp_sample_t sample;
+
+	simtemp_dev_priv_data_t *p_dev_data =
+		(simtemp_dev_priv_data_t *)filp->private_data;
+
+	simtemp_ring_buff_t *p_buff = (simtemp_ring_buff_t *)p_dev_data->buffer;
+
+	if (mutex_lock_interruptible(&read_access))
+		return -ERESTARTSYS;
+
+	if (p_buff->tail == p_buff->head) {
+		pr_err("Buffer empty \n");
+		mutex_unlock(&read_access);
+		return 0;
+	}
+
+	sample = p_buff->readings[p_buff->tail];
+	p_buff->tail = (p_buff->tail + 1) % TEMP_SAMPLE_BUF_SIZE;
+	mutex_unlock(&read_access);
+
+	if (copy_to_user(buff, &sample, sizeof(sample))) {
+		return -EFAULT;
+	}
+
+	return sizeof(sample);
 }
 
 ssize_t simtemp_write(struct file *filp, const char __user *buff, size_t count,
 		      loff_t *f_pos)
 {
-	pr_info("Write requested for %zu bytes\n", count);
-	pr_info("Current file position = %lld\n", *f_pos);
+	pr_err("Write operation not permited \n");
 
-	return 0;
+	return -EPERM;
 }
 
 int simtemp_open(struct inode *inode, struct file *filp)
 {
 	pr_info("minor access = %d\n", MINOR(inode->i_rdev));
+	simtemp_dev_priv_data_t *p_dev_data;
+
+	/* Get device's private data structure (for multiple dev) */
+	p_dev_data = container_of(inode->i_cdev, simtemp_dev_priv_data_t, cdev);
+
+	/* To supply device private data to FOPS methods of the driver */
+	filp->private_data = p_dev_data;
+
+	/* The char device is only for readings (data path) */
+	if ((filp->f_mode & FMODE_WRITE)) {
+		pr_warn("Open was unsuccessful (Write op not permited)\n");
+		return -EPERM;
+	}
+
+	pr_info("Open was successful\n");
 
 	return 0;
 }
@@ -66,6 +100,8 @@ void save_reading(simtemp_ring_buff_t *rb, simtemp_sample_t *sample)
 	pr_info("Save triggered: timestamp_ns=%llu, temp_mC=%d\n",
 		sample->timestamp_ns, sample->temp_mC);
 
+	mutex_lock(&read_access);
+
 	rb->readings[rb->head] = *sample;
 	rb->head = (rb->head + 1) % TEMP_SAMPLE_BUF_SIZE;
 
@@ -73,15 +109,21 @@ void save_reading(simtemp_ring_buff_t *rb, simtemp_sample_t *sample)
 	if (rb->head == rb->tail) {
 		rb->tail = (rb->tail + 1) % TEMP_SAMPLE_BUF_SIZE;
 	}
+	mutex_unlock(&read_access);
 }
 
 static void simtemp_work_handler(struct work_struct *work)
 {
 	pr_info("Worker callback triggered\n");
-	ktime_t kt = ktime_get();
+	ktime_t kt = ktime_get_real();
+
+	int n_rand;
+	wait_for_random_bytes();
+	get_random_bytes(&n_rand, sizeof(n_rand));
+	n_rand = n_rand % 1000;
 
 	simtemp_sample_t sample = { .timestamp_ns = kt,
-				    .temp_mC = 25000,
+				    .temp_mC = (25000 + n_rand),
 				    .flags = 0 };
 
 	save_reading(dev_data.buffer, &sample);
