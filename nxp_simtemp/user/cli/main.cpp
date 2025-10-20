@@ -2,12 +2,14 @@
 #include <fstream>
 #include <sstream>
 #include <chrono>
+#include <thread>
 #include <ctime>
 #include <iomanip>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#include <errno.h>
 
 #define DEVICE_FILE "/dev/simtemp"
 
@@ -48,8 +50,14 @@ int main() {
     int fd;
     simtemp_sample_t temp_sample;
     ssize_t bytes_read;
+    bool is_blocking = true;
+    int open_flags = O_RDONLY;
 
-    fd = open(DEVICE_FILE, O_RDONLY);
+    if (!is_blocking) {
+        open_flags |= O_NONBLOCK;
+    }
+
+    fd = open(DEVICE_FILE, open_flags);
     if (fd < 0) {
         std::cerr << "Device " << DEVICE_FILE << " open failed\n";
         return EXIT_FAILURE;
@@ -61,18 +69,28 @@ int main() {
         bytes_read = read(fd, &temp_sample, sizeof(temp_sample));
 
         if (bytes_read < 0) {
-            std::cerr << "Device read failed\n";
-            close(fd);
-            return EXIT_FAILURE;
+            if (!is_blocking && errno == EAGAIN) {
+                std::cout << "\nOPERACIÓN NO BLOQUEANTE: No hay datos disponbles\n";
+            } else {
+                std::cerr << "Device read failed\n";
+                close(fd);
+                return EXIT_FAILURE;
+            }
+        } else {
+
+            if (bytes_read != sizeof(simtemp_sample_t)) {
+                std::cerr << "Mismatch error: " << bytes_read << " bytes readed, " << sizeof(simtemp_sample_t) << " bytes expected.\n";
+                return EXIT_FAILURE;
+            }
+
+            std::string time_str = convert_ns_to_ts(temp_sample.timestamp_ns);
+            std::cout << "[" << time_str << "] Temperature: " << temp_sample.temp_mC << " mC, flags: " << temp_sample.flags << "\n";
+
         }
 
-        if (bytes_read != sizeof(simtemp_sample_t)) {
-            std::cerr << "Mismatch error: " << bytes_read << " bytes readed, " << sizeof(simtemp_sample_t) << " bytes expected.\n";
-            return EXIT_FAILURE;
+        if (!is_blocking) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }
-
-        std::string time_str = convert_ns_to_ts(temp_sample.timestamp_ns);
-        std::cout << "[" << time_str << "] Temperature: " << temp_sample.temp_mC << " mC, flags: " << temp_sample.flags << "\n";
     }
 
     close(fd);

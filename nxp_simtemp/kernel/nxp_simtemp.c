@@ -11,9 +11,6 @@
 /* Device private data */
 static simtemp_dev_priv_data_t dev_data;
 
-/* Work struct for periodic readings */
-static struct delayed_work simtemp_work;
-
 /* lock for temperature buffer access */
 static DEFINE_MUTEX(read_access);
 
@@ -37,14 +34,18 @@ ssize_t simtemp_read(struct file *filp, char __user *buff, size_t count,
 
 	simtemp_ring_buff_t *p_buff = (simtemp_ring_buff_t *)p_dev_data->buffer;
 
+	/* Non blocking call (return if no data is available) */
+	if ((filp->f_flags & O_NONBLOCK) && (p_buff->tail == p_buff->head)) {
+		return -EAGAIN;
+	}
+
+	/* Blocking call (wait if no data is available) */
+	if (wait_event_interruptible(p_dev_data->data_wq, (p_buff->tail != p_buff->head)))
+		return -ERESTARTSYS;
+
 	if (mutex_lock_interruptible(&read_access))
 		return -ERESTARTSYS;
 
-	if (p_buff->tail == p_buff->head) {
-		pr_err("Buffer empty \n");
-		mutex_unlock(&read_access);
-		return 0;
-	}
 
 	sample = p_buff->readings[p_buff->tail];
 	p_buff->tail = (p_buff->tail + 1) % TEMP_SAMPLE_BUF_SIZE;
@@ -95,7 +96,21 @@ int simtemp_release(struct inode *inode, struct file *flip)
 }
 
 /* Work handler code */
-void save_reading(simtemp_ring_buff_t *rb, simtemp_sample_t *sample)
+static int32_t simtemp_get_temperature(void) {
+	/* Default temperature vaule */
+	int32_t temperature = 25000;
+
+	int32_t n_rand;
+	wait_for_random_bytes();
+	get_random_bytes(&n_rand, sizeof(n_rand));
+	n_rand = n_rand % 1000;
+
+	temperature += n_rand;
+
+	return temperature;
+}
+
+static void save_reading(simtemp_ring_buff_t *rb, simtemp_sample_t *sample)
 {
 	pr_info("Save triggered: timestamp_ns=%llu, temp_mC=%d\n",
 		sample->timestamp_ns, sample->temp_mC);
@@ -115,21 +130,27 @@ void save_reading(simtemp_ring_buff_t *rb, simtemp_sample_t *sample)
 static void simtemp_work_handler(struct work_struct *work)
 {
 	pr_info("Worker callback triggered\n");
+	/* Get delayed_work struct from callback parameter */
+	struct delayed_work *d_work;
+	d_work = container_of(work, struct delayed_work, work);
+
+	/* Get device's private data structure (for multiple dev) */
+	simtemp_dev_priv_data_t *p_dev_data;
+	p_dev_data = container_of(d_work, simtemp_dev_priv_data_t, d_work);
+
+	simtemp_sample_t sample;
 	ktime_t kt = ktime_get_real();
 
-	int n_rand;
-	wait_for_random_bytes();
-	get_random_bytes(&n_rand, sizeof(n_rand));
-	n_rand = n_rand % 1000;
+	sample.timestamp_ns = kt;
+	sample.temp_mC = simtemp_get_temperature();
+	sample.flags= 0;
 
-	simtemp_sample_t sample = { .timestamp_ns = kt,
-				    .temp_mC = (25000 + n_rand),
-				    .flags = 0 };
+	save_reading(p_dev_data->buffer, &sample);
 
-	save_reading(dev_data.buffer, &sample);
+	wake_up_interruptible(&p_dev_data->data_wq);
 
 	/* For periodic callback */
-	schedule_delayed_work(&simtemp_work,
+	schedule_delayed_work(&p_dev_data->d_work,
 			      msecs_to_jiffies(dev_data.pdata.sampling_ms));
 }
 
@@ -190,14 +211,16 @@ int simtemp_platform_driver_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	INIT_DELAYED_WORK(&simtemp_work, simtemp_work_handler);
+	INIT_DELAYED_WORK(&dev_data.d_work, simtemp_work_handler);
 	if (!schedule_delayed_work(
-		    &simtemp_work,
+		    &dev_data.d_work,
 		    msecs_to_jiffies(dev_data.pdata.sampling_ms))) {
 		pr_err("Schedule delayed work failed\n");
 		cdev_del(&dev_data.cdev);
 		return -EPERM;
 	}
+
+	init_waitqueue_head(&dev_data.data_wq);
 
 	pr_info("Probe was successful\n");
 
@@ -208,7 +231,7 @@ int simtemp_platform_driver_probe(struct platform_device *pdev)
 void simtemp_platform_driver_remove(struct platform_device *pdev)
 {
 	/* Remove periodic callback */
-	cancel_delayed_work_sync(&simtemp_work);
+	cancel_delayed_work_sync(&dev_data.d_work);
 
 	/* Remove a device that was created with device_create() */
 	device_destroy(dev_data.class_simtemp, dev_data.dev_num);

@@ -1,6 +1,8 @@
 #include <linux/types.h>
 #include <linux/cdev.h>
 #include <linux/platform_device.h>
+#include <linux/workqueue.h>
+#include <linux/wait.h>
 
 #undef pr_fmt
 #define pr_fmt(fmt) "%s : " fmt, __func__
@@ -38,6 +40,8 @@ typedef struct simtemp_plat_data {
 typedef struct simtemp_dev_priv_data {
 	simtemp_plat_data_t pdata;
 	simtemp_ring_buff_t *buffer;
+	struct delayed_work d_work;
+	wait_queue_head_t data_wq;
 	dev_t dev_num;
 	struct cdev cdev;
 	struct class *class_simtemp;
