@@ -3,6 +3,7 @@
 #include <linux/platform_device.h>
 #include <linux/workqueue.h>
 #include <linux/wait.h>
+#include <linux/fs.h>
 
 #undef pr_fmt
 #define pr_fmt(fmt) "%s : " fmt, __func__
@@ -48,11 +49,12 @@ typedef struct simtemp_dev_priv_data {
 	struct device *device_simtemp;
 } simtemp_dev_priv_data_t;
 
-loff_t simtemp_lseek(struct file *filp, loff_t offset, int whence);
+/* File operation function prototypes */
 ssize_t simtemp_read(struct file *filp, char __user *buff, size_t count,
 		     loff_t *f_pos);
 ssize_t simtemp_write(struct file *filp, const char __user *buff, size_t count,
 		      loff_t *f_pos);
+unsigned int simtemp_poll(struct file *filp, struct poll_table_struct *wait);
 int simtemp_open(struct inode *inode, struct file *filp);
 int simtemp_release(struct inode *inode, struct file *flip);
 

@@ -7,6 +7,7 @@
 #include <linux/workqueue.h>
 #include <linux/timekeeping.h>
 #include <linux/mutex.h>
+#include <linux/poll.h>
 
 /* Device private data */
 static simtemp_dev_priv_data_t dev_data;
@@ -18,6 +19,7 @@ static DEFINE_MUTEX(read_access);
 struct file_operations simtemp_fops = { .open = simtemp_open,
 					.release = simtemp_release,
 					.read = simtemp_read,
+					.poll = simtemp_poll,
 					.write = simtemp_write,
 					.llseek = noop_llseek,
 					.owner = THIS_MODULE };
@@ -40,12 +42,12 @@ ssize_t simtemp_read(struct file *filp, char __user *buff, size_t count,
 	}
 
 	/* Blocking call (wait if no data is available) */
-	if (wait_event_interruptible(p_dev_data->data_wq, (p_buff->tail != p_buff->head)))
+	if (wait_event_interruptible(p_dev_data->data_wq,
+				     (p_buff->tail != p_buff->head)))
 		return -ERESTARTSYS;
 
 	if (mutex_lock_interruptible(&read_access))
 		return -ERESTARTSYS;
-
 
 	sample = p_buff->readings[p_buff->tail];
 	p_buff->tail = (p_buff->tail + 1) % TEMP_SAMPLE_BUF_SIZE;
@@ -64,6 +66,25 @@ ssize_t simtemp_write(struct file *filp, const char __user *buff, size_t count,
 	pr_err("Write operation not permited \n");
 
 	return -EPERM;
+}
+
+unsigned int simtemp_poll(struct file *filp, struct poll_table_struct *wait)
+{
+	pr_info("Poll requested \n");
+	unsigned int mask = 0;
+
+	simtemp_dev_priv_data_t *p_dev_data =
+		(simtemp_dev_priv_data_t *)filp->private_data;
+
+	simtemp_ring_buff_t *p_buff = (simtemp_ring_buff_t *)p_dev_data->buffer;
+
+	poll_wait(filp, &p_dev_data->data_wq, wait);
+
+	if (p_buff->tail != p_buff->head) {
+		mask |= (POLLIN | POLLRDNORM);
+	}
+
+	return mask;
 }
 
 int simtemp_open(struct inode *inode, struct file *filp)
@@ -96,7 +117,8 @@ int simtemp_release(struct inode *inode, struct file *flip)
 }
 
 /* Work handler code */
-static int32_t simtemp_get_temperature(void) {
+static int32_t simtemp_get_temperature(void)
+{
 	/* Default temperature vaule */
 	int32_t temperature = 25000;
 
@@ -131,8 +153,7 @@ static void simtemp_work_handler(struct work_struct *work)
 {
 	pr_info("Worker callback triggered\n");
 	/* Get delayed_work struct from callback parameter */
-	struct delayed_work *d_work;
-	d_work = container_of(work, struct delayed_work, work);
+	struct delayed_work *d_work = to_delayed_work(work);
 
 	/* Get device's private data structure (for multiple dev) */
 	simtemp_dev_priv_data_t *p_dev_data;
@@ -143,7 +164,7 @@ static void simtemp_work_handler(struct work_struct *work)
 
 	sample.timestamp_ns = kt;
 	sample.temp_mC = simtemp_get_temperature();
-	sample.flags= 0;
+	sample.flags = 0;
 
 	save_reading(p_dev_data->buffer, &sample);
 
