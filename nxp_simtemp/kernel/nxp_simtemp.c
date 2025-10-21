@@ -9,6 +9,9 @@
 #include <linux/mutex.h>
 #include <linux/poll.h>
 
+/* Default temperature value */
+#define DEFAULT_TEMP 25000;
+
 /* Device private data */
 static simtemp_dev_priv_data_t dev_data;
 
@@ -117,17 +120,34 @@ int simtemp_release(struct inode *inode, struct file *flip)
 }
 
 /* Work handler code */
-static int32_t simtemp_get_temperature(void)
+static int32_t simtemp_get_temperature(simtemp_sample_mode_e mode)
 {
-	/* Default temperature vaule */
-	int32_t temperature = 25000;
-
+	static int32_t temperature = DEFAULT_TEMP;
 	int32_t n_rand;
-	wait_for_random_bytes();
-	get_random_bytes(&n_rand, sizeof(n_rand));
-	n_rand = n_rand % 1000;
 
-	temperature += n_rand;
+	switch (mode) {
+	case SIMTEMP_MODE_NORMAL:
+		temperature = DEFAULT_TEMP;
+		wait_for_random_bytes();
+		get_random_bytes(&n_rand, sizeof(n_rand));
+		n_rand = n_rand % 100; // +/- 100m degree noise
+		temperature += n_rand;
+		break;
+	case SIMTEMP_MODE_NOISY:
+		temperature = DEFAULT_TEMP;
+		wait_for_random_bytes();
+		get_random_bytes(&n_rand, sizeof(n_rand));
+		n_rand = n_rand % 1000; // +/- 1 degree noise
+		temperature += n_rand;
+		break;
+	case SIMTEMP_MODE_RAMP:
+		temperature += 1000; // 1 degree step
+		temperature = temperature % 100000; // 100 degree limit
+		break;
+
+	default:
+		break;
+	}
 
 	return temperature;
 }
@@ -161,10 +181,15 @@ static void simtemp_work_handler(struct work_struct *work)
 
 	simtemp_sample_t sample;
 	ktime_t kt = ktime_get_real();
+	int32_t new_temp = simtemp_get_temperature(p_dev_data->pdata.mode);
+	uint32_t new_flags = SIMTEMP_EVT_NEW;
+	new_flags |= (new_temp > p_dev_data->pdata.threshold_mC) ?
+			     SIMTEMP_EVT_THRS :
+			     0;
 
 	sample.timestamp_ns = kt;
-	sample.temp_mC = simtemp_get_temperature();
-	sample.flags = 0;
+	sample.temp_mC = new_temp;
+	sample.flags = new_flags;
 
 	save_reading(p_dev_data->buffer, &sample);
 

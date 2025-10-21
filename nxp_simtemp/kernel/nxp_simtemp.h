@@ -10,6 +10,9 @@
 
 #define TEMP_SAMPLE_BUF_SIZE 4
 
+#define SIMTEMP_EVT_NEW 0x0001
+#define SIMTEMP_EVT_THRS 0x0002
+
 struct simtemp_sample {
 	__u64 timestamp_ns; // monotonic timestamp
 	__s32 temp_mC; // milli-degree Celsius (e.g., 44123 = 44.123 °C)
@@ -17,24 +20,23 @@ struct simtemp_sample {
 } __attribute__((packed));
 typedef struct simtemp_sample simtemp_sample_t;
 
+typedef enum simtemp_sample_mode {
+	SIMTEMP_MODE_NORMAL,
+	SIMTEMP_MODE_NOISY,
+	SIMTEMP_MODE_RAMP,
+} simtemp_sample_mode_e;
+
 typedef struct simtemp_ring_buff {
 	simtemp_sample_t readings[TEMP_SAMPLE_BUF_SIZE];
 	unsigned int head; // next write position
 	unsigned int tail; // next read position
 } simtemp_ring_buff_t;
 
-/* Mode codes */
-typedef enum simtemp_mode_code {
-	NORMAL,
-	NOISY,
-	RAMP,
-} simtemp_mode_code_e;
-
 /* Platform data of the simtemp */
 typedef struct simtemp_plat_data {
 	int sampling_ms;
 	int threshold_mC;
-	simtemp_mode_code_e mode;
+	simtemp_sample_mode_e mode;
 } simtemp_plat_data_t;
 
 /*Device private data structure */

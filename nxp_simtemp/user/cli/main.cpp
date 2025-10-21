@@ -14,7 +14,7 @@
 
 #define DEVICE_FILE "/dev/simtemp"
 
-//#define POLL_TEST
+#define POLL_TEST
 
 struct simtemp_sample {
 	__u64 timestamp_ns; // monotonic timestamp
