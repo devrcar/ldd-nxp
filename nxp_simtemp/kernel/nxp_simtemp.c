@@ -12,13 +12,18 @@
 /* Default temperature value */
 #define DEFAULT_TEMP 25000;
 
-/* Device private data */
-static simtemp_dev_priv_data_t dev_data;
+/* Multiple devices support */
+#define MAX_DEVICES 10
+/* Driver private data structure */
+typedef struct simtemp_drv_priv_data {
+	unsigned int total_devices;
+	dev_t device_num_base;
+	struct class *class_simtemp;
+} simtemp_drv_priv_data_t;
 
-/* lock for temperature buffer access */
-static DEFINE_MUTEX(read_access);
+static simtemp_drv_priv_data_t simtemp_drv_data;
 
-/* file operations of the driver (for now dummy ones)*/
+/* file operations of the driver */
 struct file_operations simtemp_fops = { .open = simtemp_open,
 					.release = simtemp_release,
 					.read = simtemp_read,
@@ -49,12 +54,13 @@ ssize_t simtemp_read(struct file *filp, char __user *buff, size_t count,
 				     (p_buff->tail != p_buff->head)))
 		return -ERESTARTSYS;
 
-	if (mutex_lock_interruptible(&read_access))
+	if (mutex_lock_interruptible(&p_dev_data->data_mutex))
 		return -ERESTARTSYS;
 
 	sample = p_buff->readings[p_buff->tail];
 	p_buff->tail = (p_buff->tail + 1) % TEMP_SAMPLE_BUF_SIZE;
-	mutex_unlock(&read_access);
+
+	mutex_unlock(&p_dev_data->data_mutex);
 
 	if (copy_to_user(buff, &sample, sizeof(sample))) {
 		return -EFAULT;
@@ -157,8 +163,6 @@ static void save_reading(simtemp_ring_buff_t *rb, simtemp_sample_t *sample)
 	pr_info("Save triggered: timestamp_ns=%llu, temp_mC=%d\n",
 		sample->timestamp_ns, sample->temp_mC);
 
-	mutex_lock(&read_access);
-
 	rb->readings[rb->head] = *sample;
 	rb->head = (rb->head + 1) % TEMP_SAMPLE_BUF_SIZE;
 
@@ -166,7 +170,6 @@ static void save_reading(simtemp_ring_buff_t *rb, simtemp_sample_t *sample)
 	if (rb->head == rb->tail) {
 		rb->tail = (rb->tail + 1) % TEMP_SAMPLE_BUF_SIZE;
 	}
-	mutex_unlock(&read_access);
 }
 
 static void simtemp_work_handler(struct work_struct *work)
@@ -179,7 +182,10 @@ static void simtemp_work_handler(struct work_struct *work)
 	simtemp_dev_priv_data_t *p_dev_data;
 	p_dev_data = container_of(d_work, simtemp_dev_priv_data_t, d_work);
 
-	simtemp_sample_t sample;
+	/* Locking control data */
+	mutex_lock(&p_dev_data->config_mutex);
+
+	int p_sampling_ms = p_dev_data->pdata.sampling_ms;
 	ktime_t kt = ktime_get_real();
 	int32_t new_temp = simtemp_get_temperature(p_dev_data->pdata.mode);
 	uint32_t new_flags = SIMTEMP_EVT_NEW;
@@ -187,17 +193,25 @@ static void simtemp_work_handler(struct work_struct *work)
 			     SIMTEMP_EVT_THRS :
 			     0;
 
+	mutex_unlock(&p_dev_data->config_mutex);
+
+	/* Filling sample data */
+	simtemp_sample_t sample;
 	sample.timestamp_ns = kt;
 	sample.temp_mC = new_temp;
 	sample.flags = new_flags;
 
+	/* Locking consumer data */
+	mutex_lock(&p_dev_data->data_mutex);
 	save_reading(p_dev_data->buffer, &sample);
+	mutex_unlock(&p_dev_data->data_mutex);
 
 	wake_up_interruptible(&p_dev_data->data_wq);
 
 	/* For periodic callback */
 	schedule_delayed_work(&p_dev_data->d_work,
-			      msecs_to_jiffies(dev_data.pdata.sampling_ms));
+			      msecs_to_jiffies(p_sampling_ms));
+
 }
 
 /* Called when matched platform device is found */
@@ -206,8 +220,17 @@ int simtemp_platform_driver_probe(struct platform_device *pdev)
 	int ret;
 
 	simtemp_plat_data_t *pdata;
+	/* Device private data ptr */
+	simtemp_dev_priv_data_t *dev_data;
 
 	pr_info("A device is detected\n");
+
+	/* Dynamically allocate memory for the device private data */
+	dev_data = devm_kzalloc(&pdev->dev, sizeof(*dev_data),GFP_KERNEL);
+	if(!dev_data){
+		pr_err("Cannot allocate memory\n");
+		return -ENOMEM;
+	}
 
 	/* Get the platform data */
 	pdata = (simtemp_plat_data_t *)dev_get_platdata(&pdev->dev);
@@ -217,56 +240,70 @@ int simtemp_platform_driver_probe(struct platform_device *pdev)
 	}
 
 	/* Save the platform data into the device data structure */
-	dev_data.pdata.sampling_ms = pdata->sampling_ms;
-	dev_data.pdata.threshold_mC = pdata->threshold_mC;
-	dev_data.pdata.mode = pdata->mode;
+	dev_data->pdata.sampling_ms = pdata->sampling_ms;
+	dev_data->pdata.threshold_mC = pdata->threshold_mC;
+	dev_data->pdata.mode = pdata->mode;
 
-	pr_info("Device sampling_ms = %d\n", dev_data.pdata.sampling_ms);
-	pr_info("Device threshold_mC = %d\n", dev_data.pdata.threshold_mC);
-	pr_info("Device mode = %d\n", dev_data.pdata.mode);
+	pr_info("Device sampling_ms = %d\n", dev_data->pdata.sampling_ms);
+	pr_info("Device threshold_mC = %d\n", dev_data->pdata.threshold_mC);
+	pr_info("Device mode = %d\n", dev_data->pdata.mode);
 
-	/* Dynamically allocate memory for the device buffer */
-	dev_data.buffer =
-		devm_kzalloc(&pdev->dev, sizeof(*dev_data.buffer), GFP_KERNEL);
-	if (!dev_data.buffer) {
-		pr_info("Cannot allocate memory \n");
+	/* Save the device data in the platform device structure */
+	dev_set_drvdata(&pdev->dev, dev_data);
+
+	/* Dynamically allocate memory using for the buffer */
+	dev_data->buffer = devm_kzalloc(&pdev->dev,
+			      sizeof(*dev_data->buffer),
+			      GFP_KERNEL);
+	if (!dev_data->buffer) {
+		pr_err("Cannot allocate memory\n");
 		return -ENOMEM;
 	}
 
-	/* Save the device data in the platform device structure */
-	dev_set_drvdata(&pdev->dev, &dev_data);
+	/* Initialize the data and config mutex */
+	mutex_init(&dev_data->data_mutex);
+	mutex_init(&dev_data->config_mutex);
+
+	/* Initialize wait_queue */
+	init_waitqueue_head(&dev_data->data_wq);
+
+	/* Saving driver global data into specific device data */
+	dev_data->class_simtemp = simtemp_drv_data.class_simtemp;
+	dev_data->dev_num = simtemp_drv_data.device_num_base + pdev->id;
 
 	/* Do cdev init and cdev add */
-	cdev_init(&dev_data.cdev, &simtemp_fops);
+	cdev_init(&dev_data->cdev, &simtemp_fops);
 
-	dev_data.cdev.owner = THIS_MODULE;
-	ret = cdev_add(&dev_data.cdev, dev_data.dev_num, 1);
+	dev_data->cdev.owner = THIS_MODULE;
+	ret = cdev_add(&dev_data->cdev, dev_data->dev_num, 1);
 	if (ret < 0) {
 		pr_err("Cdev add failed\n");
 		return ret;
 	}
 
-	/*Create device file for the detected platform device */
-	dev_data.device_simtemp = device_create(dev_data.class_simtemp, NULL,
-						dev_data.dev_num, NULL,
-						"simtemp");
-	if (IS_ERR(dev_data.device_simtemp)) {
+	/* Create device file for the detected platform device */
+	dev_data->device_simtemp = device_create(dev_data->class_simtemp, NULL,
+						dev_data->dev_num, NULL,
+						(pdev->id == 0) ? "simtemp" : "simtemp-%d", pdev->id);
+	if (IS_ERR(dev_data->device_simtemp)) {
 		pr_err("Device create failed\n");
-		ret = PTR_ERR(dev_data.device_simtemp);
-		cdev_del(&dev_data.cdev);
+		ret = PTR_ERR(dev_data->device_simtemp);
+		cdev_del(&dev_data->cdev);
 		return ret;
 	}
 
-	INIT_DELAYED_WORK(&dev_data.d_work, simtemp_work_handler);
+	/* Initialize the work queue for periodic callback */
+	INIT_DELAYED_WORK(&dev_data->d_work, simtemp_work_handler);
 	if (!schedule_delayed_work(
-		    &dev_data.d_work,
-		    msecs_to_jiffies(dev_data.pdata.sampling_ms))) {
+		    &dev_data->d_work,
+		    msecs_to_jiffies(dev_data->pdata.sampling_ms))) {
 		pr_err("Schedule delayed work failed\n");
-		cdev_del(&dev_data.cdev);
+		device_destroy(dev_data->class_simtemp, dev_data->dev_num);
+		cdev_del(&dev_data->cdev);
 		return -EPERM;
 	}
 
-	init_waitqueue_head(&dev_data.data_wq);
+	simtemp_drv_data.total_devices++;
 
 	pr_info("Probe was successful\n");
 
@@ -276,14 +313,18 @@ int simtemp_platform_driver_probe(struct platform_device *pdev)
 /* Called when the device is removed from the system */
 void simtemp_platform_driver_remove(struct platform_device *pdev)
 {
+	simtemp_dev_priv_data_t *dev_data = dev_get_drvdata(&pdev->dev);
+
 	/* Remove periodic callback */
-	cancel_delayed_work_sync(&dev_data.d_work);
+	cancel_delayed_work_sync(&dev_data->d_work);
 
 	/* Remove a device that was created with device_create() */
-	device_destroy(dev_data.class_simtemp, dev_data.dev_num);
+	device_destroy(dev_data->class_simtemp, dev_data->dev_num);
 
 	/* Remove a cdev entry from the system*/
-	cdev_del(&dev_data.cdev);
+	cdev_del(&dev_data->cdev);
+
+	simtemp_drv_data.total_devices--;
 
 	pr_info("A device is removed\n");
 }
@@ -300,18 +341,18 @@ static int __init simtemp_platform_driver_init(void)
 	int ret;
 
 	/* Dynamically allocate a device number */
-	ret = alloc_chrdev_region(&dev_data.dev_num, 0, 1, "simtemp");
+	ret = alloc_chrdev_region(&simtemp_drv_data.device_num_base, 0, MAX_DEVICES, "simtemp");
 	if (ret < 0) {
 		pr_err("Alloc chrdev failed\n");
 		return ret;
 	}
 
 	/* Create device class under /sys/class */
-	dev_data.class_simtemp = class_create("simtemp");
-	if (IS_ERR(dev_data.class_simtemp)) {
+	simtemp_drv_data.class_simtemp = class_create("simtemp");
+	if (IS_ERR(simtemp_drv_data.class_simtemp)) {
 		pr_err("Class creation failed\n");
-		ret = PTR_ERR(dev_data.class_simtemp);
-		unregister_chrdev_region(dev_data.dev_num, 1);
+		ret = PTR_ERR(simtemp_drv_data.class_simtemp);
+		unregister_chrdev_region(simtemp_drv_data.device_num_base, MAX_DEVICES);
 		return ret;
 	}
 
@@ -330,10 +371,10 @@ static void __exit simtemp_platform_driver_cleanup(void)
 	platform_driver_unregister(&simtemp_platform_driver);
 
 	/* Class destroy */
-	class_destroy(dev_data.class_simtemp);
+	class_destroy(simtemp_drv_data.class_simtemp);
 
 	/* Unregister device numbers */
-	unregister_chrdev_region(dev_data.dev_num, 1);
+	unregister_chrdev_region(simtemp_drv_data.device_num_base, MAX_DEVICES);
 
 	pr_info("simtemp platform driver unloaded\n");
 }

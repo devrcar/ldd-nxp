@@ -4,6 +4,7 @@
 #include <linux/workqueue.h>
 #include <linux/wait.h>
 #include <linux/fs.h>
+#include <linux/mutex.h>
 
 #undef pr_fmt
 #define pr_fmt(fmt) "%s : " fmt, __func__
@@ -20,12 +21,14 @@ struct simtemp_sample {
 } __attribute__((packed));
 typedef struct simtemp_sample simtemp_sample_t;
 
+/* Simulated temperature mode */
 typedef enum simtemp_sample_mode {
 	SIMTEMP_MODE_NORMAL,
 	SIMTEMP_MODE_NOISY,
 	SIMTEMP_MODE_RAMP,
 } simtemp_sample_mode_e;
 
+/* Ring buffer struct */
 typedef struct simtemp_ring_buff {
 	simtemp_sample_t readings[TEMP_SAMPLE_BUF_SIZE];
 	unsigned int head; // next write position
@@ -39,12 +42,14 @@ typedef struct simtemp_plat_data {
 	simtemp_sample_mode_e mode;
 } simtemp_plat_data_t;
 
-/*Device private data structure */
+/* Device private data structure */
 typedef struct simtemp_dev_priv_data {
 	simtemp_plat_data_t pdata;
 	simtemp_ring_buff_t *buffer;
 	struct delayed_work d_work;
 	wait_queue_head_t data_wq;
+	struct mutex data_mutex;
+	struct mutex config_mutex;
 	dev_t dev_num;
 	struct cdev cdev;
 	struct class *class_simtemp;
