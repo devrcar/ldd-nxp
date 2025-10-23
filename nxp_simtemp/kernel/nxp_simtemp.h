@@ -1,3 +1,6 @@
+#ifndef NXP_SIMTEMP_H
+#define NXP_SIMTEMP_H
+
 #include <linux/types.h>
 #include <linux/cdev.h>
 #include <linux/platform_device.h>
@@ -56,14 +59,4 @@ typedef struct simtemp_dev_priv_data {
 	struct device *device_simtemp;
 } simtemp_dev_priv_data_t;
 
-/* File operation function prototypes */
-ssize_t simtemp_read(struct file *filp, char __user *buff, size_t count,
-		     loff_t *f_pos);
-ssize_t simtemp_write(struct file *filp, const char __user *buff, size_t count,
-		      loff_t *f_pos);
-unsigned int simtemp_poll(struct file *filp, struct poll_table_struct *wait);
-int simtemp_open(struct inode *inode, struct file *filp);
-int simtemp_release(struct inode *inode, struct file *flip);
-
-int simtemp_platform_driver_probe(struct platform_device *pdev);
-void simtemp_platform_driver_remove(struct platform_device *pdev);
+#endif

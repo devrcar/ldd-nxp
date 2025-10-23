@@ -16,6 +16,9 @@
 
 #define POLL_TEST
 
+#define SIMTEMP_EVT_NEW 0x0001
+#define SIMTEMP_EVT_THRS 0x0002
+
 struct simtemp_sample {
 	__u64 timestamp_ns; // monotonic timestamp
 	__s32 temp_mC; // milli-degree Celsius (e.g., 44123 = 44.123 °C)
@@ -49,11 +52,38 @@ std::string convert_ns_to_ts(__u64 timestamp_ns) {
     return ss.str();
 }
 
+int process_read(int fd, bool is_blocking, simtemp_sample_t *sample) {
+    ssize_t bytes_read;
+    bytes_read = read(fd, sample, sizeof(*sample));
+
+    if (bytes_read < 0) {
+        if (!is_blocking && errno == EAGAIN) {
+            std::cout << "\nNon-blocking op: No data available (continue)\n";
+            return EXIT_SUCCESS;
+        } else {
+            std::cerr << "Device read failed\n";
+            return EXIT_FAILURE;
+        }
+    } else {
+
+        if (bytes_read != sizeof(simtemp_sample_t)) {
+            std::cerr << "Mismatch error: " << bytes_read << " bytes readed, " << sizeof(simtemp_sample_t) << " bytes expected.\n";
+            return EXIT_FAILURE;
+        }
+
+        bool alert = (sample->flags & SIMTEMP_EVT_THRS) != 0;
+        std::string time_str = convert_ns_to_ts(sample->timestamp_ns);
+        std::cout << "[" << time_str << "] Temperature: " << sample->temp_mC << " mC, alert: " << alert << "\n";
+    }
+    return EXIT_SUCCESS;
+}
+
 int main() {
     #ifdef POLL_TEST
-    int ret;
     struct pollfd pfd;
+    constexpr static int POLL_TIMEOUT = 5000;
     #endif
+    int ret;
     int fd;
     simtemp_sample_t temp_sample;
     ssize_t bytes_read;
@@ -74,13 +104,13 @@ int main() {
 
     #ifdef POLL_TEST
     pfd.fd = fd;
-    pfd.events = ( POLLIN | POLLRDNORM );
+    pfd.events = ( POLLIN | POLLRDNORM | POLLPRI );
     #endif
 
     while(true) {
         #ifdef POLL_TEST
-        std::cout << "\nStarting poll (5 sec timeout)...\n";
-        ret = poll(&pfd,1,5000);
+        std::cout << "\nStarting poll (" << POLL_TIMEOUT << " msec timeout)...\n";
+        ret = poll(&pfd,1,POLL_TIMEOUT);
         if (ret < 0) {
             std::cerr << "Poll failed\n";
             return EXIT_FAILURE;
@@ -89,51 +119,23 @@ int main() {
             std::cerr << "Poll timeout\n";
             continue;
         }
+        if(pfd.revents & POLLPRI) {
+            std::cout << "URGENT: Threshold crossing detected!\n";
+        }
         if(pfd.revents & (POLLIN | POLLRDNORM)) {
             std::cout << "Data is ready. Attempting to read..\n";
-            bytes_read = read(fd, &temp_sample, sizeof(temp_sample));
-
-            if (bytes_read < 0) {
-                if (!is_blocking && errno == EAGAIN) {
-                    std::cout << "\nOPERACIÓN NO BLOQUEANTE: No hay datos disponbles\n";
-                } else {
-                    std::cerr << "Device read failed\n";
-                    close(fd);
-                    return EXIT_FAILURE;
-                }
-            } else {
-
-                if (bytes_read != sizeof(simtemp_sample_t)) {
-                    std::cerr << "Mismatch error: " << bytes_read << " bytes readed, " << sizeof(simtemp_sample_t) << " bytes expected.\n";
-                    return EXIT_FAILURE;
-                }
-
-                std::string time_str = convert_ns_to_ts(temp_sample.timestamp_ns);
-                std::cout << "[" << time_str << "] Temperature: " << temp_sample.temp_mC << " mC, flags: " << temp_sample.flags << "\n";
-            }
-        }
-        #else
-        bytes_read = read(fd, &temp_sample, sizeof(temp_sample));
-
-        if (bytes_read < 0) {
-            if (!is_blocking && errno == EAGAIN) {
-                std::cout << "\nOPERACIÓN NO BLOQUEANTE: No hay datos disponbles\n";
-            } else {
-                std::cerr << "Device read failed\n";
+            ret = process_read(fd, is_blocking, &temp_sample);
+            if (ret) {
                 close(fd);
                 return EXIT_FAILURE;
             }
-        } else {
-
-            if (bytes_read != sizeof(simtemp_sample_t)) {
-                std::cerr << "Mismatch error: " << bytes_read << " bytes readed, " << sizeof(simtemp_sample_t) << " bytes expected.\n";
-                return EXIT_FAILURE;
-            }
-
-            std::string time_str = convert_ns_to_ts(temp_sample.timestamp_ns);
-            std::cout << "[" << time_str << "] Temperature: " << temp_sample.temp_mC << " mC, flags: " << temp_sample.flags << "\n";
         }
-
+        #else
+        ret = process_read(fd, is_blocking, &temp_sample);
+        if (ret) {
+            close(fd);
+            return EXIT_FAILURE;
+        }
         if (!is_blocking) {
             std::this_thread::sleep_for(std::chrono::milliseconds(500));
         }

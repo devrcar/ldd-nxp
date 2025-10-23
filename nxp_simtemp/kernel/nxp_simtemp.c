@@ -1,4 +1,5 @@
 #include "nxp_simtemp.h"
+#include "ring_buff_helper.h"
 #include <linux/cdev.h>
 #include <linux/device.h>
 #include <linux/module.h>
@@ -23,19 +24,39 @@ typedef struct simtemp_drv_priv_data {
 
 static simtemp_drv_priv_data_t simtemp_drv_data;
 
-/* file operations of the driver */
-struct file_operations simtemp_fops = { .open = simtemp_open,
-					.release = simtemp_release,
-					.read = simtemp_read,
-					.poll = simtemp_poll,
-					.write = simtemp_write,
-					.llseek = noop_llseek,
-					.owner = THIS_MODULE };
+/*
+** Function Prototypes
+*/
+int simtemp_platform_driver_probe(struct platform_device *pdev);
+void simtemp_platform_driver_remove(struct platform_device *pdev);
+static int32_t simtemp_get_temperature(simtemp_sample_mode_e mode);
+static void simtemp_work_handler(struct work_struct *work);
+
+/*************** File operation functions ****************/
+ssize_t simtemp_read(struct file *filp, char __user *buff, size_t count,
+		     loff_t *f_pos);
+ssize_t simtemp_write(struct file *filp, const char __user *buff, size_t count,
+		      loff_t *f_pos);
+unsigned int simtemp_poll(struct file *filp, struct poll_table_struct *wait);
+int simtemp_open(struct inode *inode, struct file *filp);
+int simtemp_release(struct inode *inode, struct file *flip);
+
+/*
+** File operation structure
+*/
+static struct file_operations simtemp_fops = { .open = simtemp_open,
+					       .release = simtemp_release,
+					       .read = simtemp_read,
+					       .poll = simtemp_poll,
+					       .write = simtemp_write,
+					       .llseek = noop_llseek,
+					       .owner = THIS_MODULE };
 
 ssize_t simtemp_read(struct file *filp, char __user *buff, size_t count,
 		     loff_t *f_pos)
 {
 	pr_info("Read requested for %zu bytes \n", count);
+	int ret;
 
 	simtemp_sample_t sample;
 
@@ -45,22 +66,26 @@ ssize_t simtemp_read(struct file *filp, char __user *buff, size_t count,
 	simtemp_ring_buff_t *p_buff = (simtemp_ring_buff_t *)p_dev_data->buffer;
 
 	/* Non blocking call (return if no data is available) */
-	if ((filp->f_flags & O_NONBLOCK) && (p_buff->tail == p_buff->head)) {
+	if ((filp->f_flags & O_NONBLOCK) && (rb_is_empty(p_buff))) {
 		return -EAGAIN;
 	}
 
 	/* Blocking call (wait if no data is available) */
 	if (wait_event_interruptible(p_dev_data->data_wq,
-				     (p_buff->tail != p_buff->head)))
+				     (!rb_is_empty(p_buff))))
 		return -ERESTARTSYS;
 
 	if (mutex_lock_interruptible(&p_dev_data->data_mutex))
 		return -ERESTARTSYS;
 
-	sample = p_buff->readings[p_buff->tail];
-	p_buff->tail = (p_buff->tail + 1) % TEMP_SAMPLE_BUF_SIZE;
+	ret = rb_get(p_buff, &sample);
 
 	mutex_unlock(&p_dev_data->data_mutex);
+
+	if (!ret) {
+		/* The ring buffer is empty (not expected) */
+		return -EFAULT;
+	}
 
 	if (copy_to_user(buff, &sample, sizeof(sample))) {
 		return -EFAULT;
@@ -89,8 +114,15 @@ unsigned int simtemp_poll(struct file *filp, struct poll_table_struct *wait)
 
 	poll_wait(filp, &p_dev_data->data_wq, wait);
 
-	if (p_buff->tail != p_buff->head) {
+	/* Normal read data event */
+	if (!rb_is_empty(p_buff)) {
 		mask |= (POLLIN | POLLRDNORM);
+	}
+
+	/* Threshold crossed (HIPRIO) */
+	simtemp_sample_t sample;
+	if (rb_peek(p_buff, &sample) && (sample.flags & SIMTEMP_EVT_THRS)) {
+		mask |= POLLPRI;
 	}
 
 	return mask;
@@ -158,23 +190,8 @@ static int32_t simtemp_get_temperature(simtemp_sample_mode_e mode)
 	return temperature;
 }
 
-static void save_reading(simtemp_ring_buff_t *rb, simtemp_sample_t *sample)
-{
-	pr_info("Save triggered: timestamp_ns=%llu, temp_mC=%d\n",
-		sample->timestamp_ns, sample->temp_mC);
-
-	rb->readings[rb->head] = *sample;
-	rb->head = (rb->head + 1) % TEMP_SAMPLE_BUF_SIZE;
-
-	/* Move tail if buffer is full */
-	if (rb->head == rb->tail) {
-		rb->tail = (rb->tail + 1) % TEMP_SAMPLE_BUF_SIZE;
-	}
-}
-
 static void simtemp_work_handler(struct work_struct *work)
 {
-	pr_info("Worker callback triggered\n");
 	/* Get delayed_work struct from callback parameter */
 	struct delayed_work *d_work = to_delayed_work(work);
 
@@ -202,8 +219,10 @@ static void simtemp_work_handler(struct work_struct *work)
 	sample.flags = new_flags;
 
 	/* Locking consumer data */
+	pr_info("Save triggered: timestamp_ns=%llu, temp_mC=%d\n",
+		sample.timestamp_ns, sample.temp_mC);
 	mutex_lock(&p_dev_data->data_mutex);
-	save_reading(p_dev_data->buffer, &sample);
+	rb_put(p_dev_data->buffer, &sample);
 	mutex_unlock(&p_dev_data->data_mutex);
 
 	wake_up_interruptible(&p_dev_data->data_wq);
@@ -211,7 +230,6 @@ static void simtemp_work_handler(struct work_struct *work)
 	/* For periodic callback */
 	schedule_delayed_work(&p_dev_data->d_work,
 			      msecs_to_jiffies(p_sampling_ms));
-
 }
 
 /* Called when matched platform device is found */
@@ -226,8 +244,8 @@ int simtemp_platform_driver_probe(struct platform_device *pdev)
 	pr_info("A device is detected\n");
 
 	/* Dynamically allocate memory for the device private data */
-	dev_data = devm_kzalloc(&pdev->dev, sizeof(*dev_data),GFP_KERNEL);
-	if(!dev_data){
+	dev_data = devm_kzalloc(&pdev->dev, sizeof(*dev_data), GFP_KERNEL);
+	if (!dev_data) {
 		pr_err("Cannot allocate memory\n");
 		return -ENOMEM;
 	}
@@ -252,9 +270,8 @@ int simtemp_platform_driver_probe(struct platform_device *pdev)
 	dev_set_drvdata(&pdev->dev, dev_data);
 
 	/* Dynamically allocate memory using for the buffer */
-	dev_data->buffer = devm_kzalloc(&pdev->dev,
-			      sizeof(*dev_data->buffer),
-			      GFP_KERNEL);
+	dev_data->buffer =
+		devm_kzalloc(&pdev->dev, sizeof(*dev_data->buffer), GFP_KERNEL);
 	if (!dev_data->buffer) {
 		pr_err("Cannot allocate memory\n");
 		return -ENOMEM;
@@ -282,9 +299,9 @@ int simtemp_platform_driver_probe(struct platform_device *pdev)
 	}
 
 	/* Create device file for the detected platform device */
-	dev_data->device_simtemp = device_create(dev_data->class_simtemp, NULL,
-						dev_data->dev_num, NULL,
-						(pdev->id == 0) ? "simtemp" : "simtemp-%d", pdev->id);
+	dev_data->device_simtemp = device_create(
+		dev_data->class_simtemp, NULL, dev_data->dev_num, NULL,
+		(pdev->id == 0) ? "simtemp" : "simtemp-%d", pdev->id);
 	if (IS_ERR(dev_data->device_simtemp)) {
 		pr_err("Device create failed\n");
 		ret = PTR_ERR(dev_data->device_simtemp);
@@ -329,7 +346,7 @@ void simtemp_platform_driver_remove(struct platform_device *pdev)
 	pr_info("A device is removed\n");
 }
 
-struct platform_driver simtemp_platform_driver = {
+static struct platform_driver simtemp_platform_driver = {
 	.probe = simtemp_platform_driver_probe,
 	.remove = simtemp_platform_driver_remove,
 	.driver = { .name = "simtemp" }
@@ -341,7 +358,8 @@ static int __init simtemp_platform_driver_init(void)
 	int ret;
 
 	/* Dynamically allocate a device number */
-	ret = alloc_chrdev_region(&simtemp_drv_data.device_num_base, 0, MAX_DEVICES, "simtemp");
+	ret = alloc_chrdev_region(&simtemp_drv_data.device_num_base, 0,
+				  MAX_DEVICES, "simtemp");
 	if (ret < 0) {
 		pr_err("Alloc chrdev failed\n");
 		return ret;
@@ -352,7 +370,8 @@ static int __init simtemp_platform_driver_init(void)
 	if (IS_ERR(simtemp_drv_data.class_simtemp)) {
 		pr_err("Class creation failed\n");
 		ret = PTR_ERR(simtemp_drv_data.class_simtemp);
-		unregister_chrdev_region(simtemp_drv_data.device_num_base, MAX_DEVICES);
+		unregister_chrdev_region(simtemp_drv_data.device_num_base,
+					 MAX_DEVICES);
 		return ret;
 	}
 
