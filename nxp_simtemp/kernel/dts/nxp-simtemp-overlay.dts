@@ -1,0 +1,17 @@
+/dts-v1/;
+/plugin/;
+
+/ {
+    fragment@0 {
+        target_path = "/";
+        __overlay__ {
+            simtemp0: simtemp@0 {
+                compatible = "nxp,simtemp";
+                nxp,sampling-ms = <100>;
+                nxp,threshold-mC = <45000>;
+                nxp,mode = "normal";
+                status = "okay";
+            };
+        };
+    };
+};

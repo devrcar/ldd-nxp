@@ -5,7 +5,11 @@ ssize_t simtemp_sampling_ms_show(struct device *dev,
 				 struct device_attribute *attr, char *buf)
 {
 	int ret;
-	simtemp_dev_priv_data_t *p_dev_data = dev_get_drvdata(dev);
+	simtemp_dev_priv_data_t *p_dev_data = dev_get_drvdata(dev->parent);
+	if (!p_dev_data) {
+		dev_err(dev->parent, "No device data available\n");
+		return -EINVAL;
+	}
 
 	mutex_lock(&p_dev_data->config_mutex);
 
@@ -23,7 +27,11 @@ ssize_t simtemp_sampling_ms_store(struct device *dev,
 {
 	int ret;
 	unsigned int new_period;
-	simtemp_dev_priv_data_t *p_dev_data = dev_get_drvdata(dev);
+	simtemp_dev_priv_data_t *p_dev_data = dev_get_drvdata(dev->parent);
+	if (!p_dev_data) {
+		dev_err(dev->parent, "No device data available\n");
+		return -EINVAL;
+	}
 
 	ret = kstrtouint(buf, 10, &new_period);
 	if (ret)
@@ -53,7 +61,11 @@ ssize_t simtemp_threshold_mc_show(struct device *dev,
 				  struct device_attribute *attr, char *buf)
 {
 	int ret;
-	simtemp_dev_priv_data_t *p_dev_data = dev_get_drvdata(dev);
+	simtemp_dev_priv_data_t *p_dev_data = dev_get_drvdata(dev->parent);
+	if (!p_dev_data) {
+		dev_err(dev->parent, "No device data available\n");
+		return -EINVAL;
+	}
 
 	mutex_lock(&p_dev_data->config_mutex);
 
@@ -71,7 +83,11 @@ ssize_t simtemp_threshold_mc_store(struct device *dev,
 {
 	int ret;
 	int new_threshold;
-	simtemp_dev_priv_data_t *p_dev_data = dev_get_drvdata(dev);
+	simtemp_dev_priv_data_t *p_dev_data = dev_get_drvdata(dev->parent);
+	if (!p_dev_data) {
+		dev_err(dev->parent, "No device data available\n");
+		return -EINVAL;
+	}
 
 	ret = kstrtoint(buf, 10, &new_threshold);
 	if (ret)
@@ -97,7 +113,11 @@ ssize_t simtemp_mode_show(struct device *dev, struct device_attribute *attr,
 			  char *buf)
 {
 	int ret;
-	simtemp_dev_priv_data_t *p_dev_data = dev_get_drvdata(dev);
+	simtemp_dev_priv_data_t *p_dev_data = dev_get_drvdata(dev->parent);
+	if (!p_dev_data) {
+		dev_err(dev->parent, "No device data available\n");
+		return -EINVAL;
+	}
 
 	mutex_lock(&p_dev_data->config_mutex);
 
@@ -115,7 +135,11 @@ ssize_t simtemp_mode_store(struct device *dev, struct device_attribute *attr,
 {
 	int index;
 	bool match = false;
-	simtemp_dev_priv_data_t *p_dev_data = dev_get_drvdata(dev);
+	simtemp_dev_priv_data_t *p_dev_data = dev_get_drvdata(dev->parent);
+	if (!p_dev_data) {
+		dev_err(dev->parent, "No device data available\n");
+		return -EINVAL;
+	}
 
 	/* Compare input string with each mode */
 	for (index = 0; index < ARRAY_SIZE(mode_strings); index++) {
@@ -143,7 +167,11 @@ ssize_t simtemp_stats_show(struct device *dev, struct device_attribute *attr,
 			   char *buf)
 {
 	int ret;
-	simtemp_dev_priv_data_t *p_dev_data = dev_get_drvdata(dev);
+	simtemp_dev_priv_data_t *p_dev_data = dev_get_drvdata(dev->parent);
+	if (!p_dev_data) {
+		dev_err(dev->parent, "No device data available\n");
+		return -EINVAL;
+	}
 
 	mutex_lock(&p_dev_data->config_mutex);
 

@@ -12,6 +12,9 @@
 #undef pr_fmt
 #define pr_fmt(fmt) "%s : " fmt, __func__
 
+#define SIMTEMP_DEFAULT_SAMPLING_MS 500
+#define SIMTEMP_DEFAULT_THRESHOLD_MC 42000
+
 #define TEMP_SAMPLE_BUF_SIZE 4
 
 #define SIMTEMP_EVT_NEW 0x0001

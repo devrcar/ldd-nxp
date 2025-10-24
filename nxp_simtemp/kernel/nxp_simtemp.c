@@ -1,6 +1,7 @@
 #include "nxp_simtemp.h"
 #include "ring_buff_helper.h"
 #include "nxp_simtemp_sysfs_iface.h"
+#include "nxp_simtemp_dt_helper.h"
 #include <linux/cdev.h>
 #include <linux/device.h>
 #include <linux/module.h>
@@ -10,6 +11,8 @@
 #include <linux/timekeeping.h>
 #include <linux/mutex.h>
 #include <linux/poll.h>
+#include <linux/of.h>
+#include <linux/of_device.h>
 
 /* Default temperature value */
 #define DEFAULT_TEMP 25000;
@@ -56,7 +59,6 @@ static struct file_operations simtemp_fops = { .open = simtemp_open,
 ssize_t simtemp_read(struct file *filp, char __user *buff, size_t count,
 		     loff_t *f_pos)
 {
-	pr_info("Read requested for %zu bytes \n", count);
 	int ret;
 
 	simtemp_sample_t sample;
@@ -64,7 +66,11 @@ ssize_t simtemp_read(struct file *filp, char __user *buff, size_t count,
 	simtemp_dev_priv_data_t *p_dev_data =
 		(simtemp_dev_priv_data_t *)filp->private_data;
 
+	struct device *plat_dev = p_dev_data->device_simtemp->parent;
+
 	simtemp_ring_buff_t *p_buff = (simtemp_ring_buff_t *)p_dev_data->buffer;
+
+	dev_info(plat_dev, "Read requested for %zu bytes \n", count);
 
 	/* Non blocking call (return if no data is available) */
 	if ((filp->f_flags & O_NONBLOCK) && (rb_is_empty(p_buff))) {
@@ -98,20 +104,28 @@ ssize_t simtemp_read(struct file *filp, char __user *buff, size_t count,
 ssize_t simtemp_write(struct file *filp, const char __user *buff, size_t count,
 		      loff_t *f_pos)
 {
-	pr_err("Write operation not permited \n");
+	simtemp_dev_priv_data_t *p_dev_data =
+		(simtemp_dev_priv_data_t *)filp->private_data;
+
+	struct device *plat_dev = p_dev_data->device_simtemp->parent;
+
+	dev_err(plat_dev, "Write operation not permited \n");
 
 	return -EPERM;
 }
 
 unsigned int simtemp_poll(struct file *filp, struct poll_table_struct *wait)
 {
-	pr_info("Poll requested \n");
 	unsigned int mask = 0;
 
 	simtemp_dev_priv_data_t *p_dev_data =
 		(simtemp_dev_priv_data_t *)filp->private_data;
 
+	struct device *plat_dev = p_dev_data->device_simtemp->parent;
+
 	simtemp_ring_buff_t *p_buff = (simtemp_ring_buff_t *)p_dev_data->buffer;
+
+	dev_info(plat_dev, "Poll requested \n");
 
 	poll_wait(filp, &p_dev_data->data_wq, wait);
 
@@ -131,29 +145,40 @@ unsigned int simtemp_poll(struct file *filp, struct poll_table_struct *wait)
 
 int simtemp_open(struct inode *inode, struct file *filp)
 {
-	pr_info("minor access = %d\n", MINOR(inode->i_rdev));
 	simtemp_dev_priv_data_t *p_dev_data;
 
-	/* Get device's private data structure (for multiple dev) */
+	/* Get device's private data structure */
 	p_dev_data = container_of(inode->i_cdev, simtemp_dev_priv_data_t, cdev);
+
+	struct device *plat_dev = p_dev_data->device_simtemp->parent;
+
+	dev_info(plat_dev, "minor access = %d\n", MINOR(inode->i_rdev));
 
 	/* To supply device private data to FOPS methods of the driver */
 	filp->private_data = p_dev_data;
 
 	/* The char device is only for readings (data path) */
 	if ((filp->f_mode & FMODE_WRITE)) {
-		pr_warn("Open was unsuccessful (Write op not permited)\n");
+		dev_warn(plat_dev,
+			 "Open was unsuccessful (Write op not permited)\n");
 		return -EPERM;
 	}
 
-	pr_info("Open was successful\n");
+	dev_info(plat_dev, "Open was successful\n");
 
 	return 0;
 }
 
 int simtemp_release(struct inode *inode, struct file *flip)
 {
-	pr_info("release was successful\n");
+	simtemp_dev_priv_data_t *p_dev_data;
+
+	/* Get device's private data structure */
+	p_dev_data = container_of(inode->i_cdev, simtemp_dev_priv_data_t, cdev);
+
+	struct device *plat_dev = p_dev_data->device_simtemp->parent;
+
+	dev_info(plat_dev, "release was successful\n");
 
 	return 0;
 }
@@ -199,6 +224,7 @@ static void simtemp_work_handler(struct work_struct *work)
 	/* Get device's private data structure */
 	simtemp_dev_priv_data_t *p_dev_data;
 	p_dev_data = container_of(d_work, simtemp_dev_priv_data_t, d_work);
+	struct device *plat_dev = p_dev_data->device_simtemp->parent;
 
 	/* Locking control data */
 	mutex_lock(&p_dev_data->config_mutex);
@@ -224,8 +250,8 @@ static void simtemp_work_handler(struct work_struct *work)
 	sample.temp_mC = new_temp;
 	sample.flags = new_flags;
 
-	pr_info("Save triggered: timestamp_ns=%llu, temp_mC=%d\n",
-		sample.timestamp_ns, sample.temp_mC);
+	dev_info(plat_dev, "Save triggered: timestamp_ns=%llu, temp_mC=%d\n",
+		 sample.timestamp_ns, sample.temp_mC);
 	/* Locking consumer data */
 	mutex_lock(&p_dev_data->data_mutex);
 	rb_put(p_dev_data->buffer, &sample);
@@ -263,19 +289,28 @@ int simtemp_platform_driver_probe(struct platform_device *pdev)
 	/* Device private data ptr */
 	simtemp_dev_priv_data_t *dev_data;
 
-	pr_info("A device is detected\n");
+	dev_info(&pdev->dev, "A device is detected\n");
 
 	/* Dynamically allocate memory for the device private data */
 	dev_data = devm_kzalloc(&pdev->dev, sizeof(*dev_data), GFP_KERNEL);
 	if (!dev_data) {
-		pr_err("Cannot allocate memory\n");
+		dev_err(&pdev->dev, "Cannot allocate memory\n");
 		return -ENOMEM;
 	}
 
-	/* Get the platform data */
-	pdata = (simtemp_plat_data_t *)dev_get_platdata(&pdev->dev);
+	/* Get the platform data (first try from DT) */
+	pdata = simtemp_dev_get_platdata_from_dt(&pdev->dev);
+	if (IS_ERR(pdata)) {
+		return PTR_ERR(pdata);
+	}
+
+	/* Then try from manual device register */
 	if (!pdata) {
-		pr_err("No platform data available\n");
+		pdata = (simtemp_plat_data_t *)dev_get_platdata(&pdev->dev);
+	}
+
+	if (!pdata) {
+		dev_err(&pdev->dev, "No platform data available\n");
 		return -EINVAL;
 	}
 
@@ -284,15 +319,17 @@ int simtemp_platform_driver_probe(struct platform_device *pdev)
 	dev_data->pdata.threshold_mC = pdata->threshold_mC;
 	dev_data->pdata.mode = pdata->mode;
 
-	pr_info("Device sampling_ms = %d\n", dev_data->pdata.sampling_ms);
-	pr_info("Device threshold_mC = %d\n", dev_data->pdata.threshold_mC);
-	pr_info("Device mode = %d\n", dev_data->pdata.mode);
+	dev_info(&pdev->dev, "Device sampling_ms = %d\n",
+		 dev_data->pdata.sampling_ms);
+	dev_info(&pdev->dev, "Device threshold_mC = %d\n",
+		 dev_data->pdata.threshold_mC);
+	dev_info(&pdev->dev, "Device mode = %d\n", dev_data->pdata.mode);
 
 	/* Dynamically allocate memory using for the buffer */
 	dev_data->buffer =
 		devm_kzalloc(&pdev->dev, sizeof(*dev_data->buffer), GFP_KERNEL);
 	if (!dev_data->buffer) {
-		pr_err("Cannot allocate memory\n");
+		dev_err(&pdev->dev, "Cannot allocate memory\n");
 		return -ENOMEM;
 	}
 
@@ -305,7 +342,8 @@ int simtemp_platform_driver_probe(struct platform_device *pdev)
 
 	/* Saving driver global data into specific device data */
 	dev_data->class_simtemp = simtemp_drv_data.class_simtemp;
-	dev_data->dev_num = simtemp_drv_data.device_num_base + pdev->id;
+	dev_data->dev_num = simtemp_drv_data.device_num_base +
+			    simtemp_drv_data.total_devices;
 
 	/* Save the device data in the platform device structure */
 	dev_set_drvdata(&pdev->dev, dev_data);
@@ -316,30 +354,30 @@ int simtemp_platform_driver_probe(struct platform_device *pdev)
 	dev_data->cdev.owner = THIS_MODULE;
 	ret = cdev_add(&dev_data->cdev, dev_data->dev_num, 1);
 	if (ret < 0) {
-		pr_err("Cdev add failed\n");
+		dev_err(&pdev->dev, "Cdev add failed\n");
 		return ret;
 	}
 
 	/* Create device file and sysfs attributes */
 	dev_data->device_simtemp = device_create_with_groups(
-		dev_data->class_simtemp, NULL, dev_data->dev_num, NULL,
+		dev_data->class_simtemp, &pdev->dev, dev_data->dev_num, NULL,
 		simtemp_sensor_groups,
-		(pdev->id == 0) ? "simtemp" : "simtemp-%d", pdev->id);
+		(simtemp_drv_data.total_devices == 0) ? "simtemp" :
+							"simtemp-%d",
+		simtemp_drv_data.total_devices);
 	if (IS_ERR(dev_data->device_simtemp)) {
-		pr_err("Device create failed\n");
+		dev_err(&pdev->dev, "Device create failed\n");
 		ret = PTR_ERR(dev_data->device_simtemp);
 		cdev_del(&dev_data->cdev);
 		return ret;
 	}
-	/* Save the device data in the class device structure */
-	dev_set_drvdata(dev_data->device_simtemp, dev_data);
 
 	/* Initialize the work queue for periodic callback */
 	INIT_DELAYED_WORK(&dev_data->d_work, simtemp_work_handler);
 	if (!schedule_delayed_work(
 		    &dev_data->d_work,
 		    msecs_to_jiffies(dev_data->pdata.sampling_ms))) {
-		pr_err("Schedule delayed work failed\n");
+		dev_err(&pdev->dev, "Schedule delayed work failed\n");
 		device_destroy(dev_data->class_simtemp, dev_data->dev_num);
 		cdev_del(&dev_data->cdev);
 		return -EPERM;
@@ -347,7 +385,7 @@ int simtemp_platform_driver_probe(struct platform_device *pdev)
 
 	simtemp_drv_data.total_devices++;
 
-	pr_info("Probe was successful\n");
+	dev_info(&pdev->dev, "Probe was successful\n");
 
 	return 0;
 }
@@ -368,13 +406,21 @@ void simtemp_platform_driver_remove(struct platform_device *pdev)
 
 	simtemp_drv_data.total_devices--;
 
-	pr_info("A device is removed\n");
+	dev_info(&pdev->dev, "A device is removed\n");
 }
+
+static const struct of_device_id simtemp_dt_match[] = {
+	{ .compatible = "nxp,simtemp" },
+	{}
+};
+
+MODULE_DEVICE_TABLE(of, simtemp_dt_match);
 
 static struct platform_driver simtemp_platform_driver = {
 	.probe = simtemp_platform_driver_probe,
 	.remove = simtemp_platform_driver_remove,
-	.driver = { .name = "simtemp" }
+	.driver = { .name = "simtemp",
+		    .of_match_table = of_match_ptr(simtemp_dt_match) }
 };
 
 /* Module's init entry point */
