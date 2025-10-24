@@ -40,7 +40,7 @@ typedef struct simtemp_ring_buff {
 
 /* Platform data of the simtemp */
 typedef struct simtemp_plat_data {
-	int sampling_ms;
+	unsigned int sampling_ms;
 	int threshold_mC;
 	simtemp_sample_mode_e mode;
 } simtemp_plat_data_t;
@@ -49,10 +49,16 @@ typedef struct simtemp_plat_data {
 typedef struct simtemp_dev_priv_data {
 	simtemp_plat_data_t pdata;
 	simtemp_ring_buff_t *buffer;
+
+	/* Statistics (read-only) */
+	unsigned long update_count;
+	unsigned long alert_count;
+
 	struct delayed_work d_work;
 	wait_queue_head_t data_wq;
 	struct mutex data_mutex;
 	struct mutex config_mutex;
+
 	dev_t dev_num;
 	struct cdev cdev;
 	struct class *class_simtemp;

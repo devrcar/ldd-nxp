@@ -1,6 +1,6 @@
 obj-m := simtemp.o local_device_setup.o
 
-simtemp-objs := nxp_simtemp.o ring_buff_helper.o
+simtemp-objs := nxp_simtemp.o ring_buff_helper.o nxp_simtemp_sysfs_iface.o
 
 HOST_KERN_DIR = /lib/modules/$(shell uname -r)/build
 

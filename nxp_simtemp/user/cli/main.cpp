@@ -73,7 +73,7 @@ int process_read(int fd, bool is_blocking, simtemp_sample_t *sample) {
 
         bool alert = (sample->flags & SIMTEMP_EVT_THRS) != 0;
         std::string time_str = convert_ns_to_ts(sample->timestamp_ns);
-        std::cout << "[" << time_str << "] Temperature: " << sample->temp_mC << " mC, alert: " << alert << "\n";
+        std::cout << "[" << time_str << "] Temperature: " << (sample->temp_mC/1000.0) << "C, alert: " << alert << "\n";
     }
     return EXIT_SUCCESS;
 }
@@ -116,7 +116,7 @@ int main() {
             return EXIT_FAILURE;
         }
         if (ret == 0) {
-            std::cerr << "Poll timeout\n";
+            // std::cerr << "Poll timeout\n";
             continue;
         }
         if(pfd.revents & POLLPRI) {

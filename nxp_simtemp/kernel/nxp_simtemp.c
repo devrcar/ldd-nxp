@@ -1,5 +1,6 @@
 #include "nxp_simtemp.h"
 #include "ring_buff_helper.h"
+#include "nxp_simtemp_sysfs_iface.h"
 #include <linux/cdev.h>
 #include <linux/device.h>
 #include <linux/module.h>
@@ -195,7 +196,7 @@ static void simtemp_work_handler(struct work_struct *work)
 	/* Get delayed_work struct from callback parameter */
 	struct delayed_work *d_work = to_delayed_work(work);
 
-	/* Get device's private data structure (for multiple dev) */
+	/* Get device's private data structure */
 	simtemp_dev_priv_data_t *p_dev_data;
 	p_dev_data = container_of(d_work, simtemp_dev_priv_data_t, d_work);
 
@@ -205,10 +206,15 @@ static void simtemp_work_handler(struct work_struct *work)
 	int p_sampling_ms = p_dev_data->pdata.sampling_ms;
 	ktime_t kt = ktime_get_real();
 	int32_t new_temp = simtemp_get_temperature(p_dev_data->pdata.mode);
-	uint32_t new_flags = SIMTEMP_EVT_NEW;
-	new_flags |= (new_temp > p_dev_data->pdata.threshold_mC) ?
-			     SIMTEMP_EVT_THRS :
-			     0;
+	bool is_threshold_crossed = (new_temp > p_dev_data->pdata.threshold_mC);
+	uint32_t new_flags = is_threshold_crossed ?
+				     (SIMTEMP_EVT_NEW | SIMTEMP_EVT_THRS) :
+				     SIMTEMP_EVT_NEW;
+
+	/* Statistics */
+	p_dev_data->update_count++;
+	if (is_threshold_crossed)
+		p_dev_data->alert_count++;
 
 	mutex_unlock(&p_dev_data->config_mutex);
 
@@ -218,9 +224,9 @@ static void simtemp_work_handler(struct work_struct *work)
 	sample.temp_mC = new_temp;
 	sample.flags = new_flags;
 
-	/* Locking consumer data */
 	pr_info("Save triggered: timestamp_ns=%llu, temp_mC=%d\n",
 		sample.timestamp_ns, sample.temp_mC);
+	/* Locking consumer data */
 	mutex_lock(&p_dev_data->data_mutex);
 	rb_put(p_dev_data->buffer, &sample);
 	mutex_unlock(&p_dev_data->data_mutex);
@@ -232,12 +238,28 @@ static void simtemp_work_handler(struct work_struct *work)
 			      msecs_to_jiffies(p_sampling_ms));
 }
 
+/* Sysfs attributes */
+static DEVICE_ATTR_RW(simtemp_sampling_ms);
+static DEVICE_ATTR_RW(simtemp_threshold_mc);
+static DEVICE_ATTR_RW(simtemp_mode);
+static DEVICE_ATTR_RO(simtemp_stats);
+
+static struct attribute *simtemp_sensor_attrs[] = {
+	&dev_attr_simtemp_sampling_ms.attr,
+	&dev_attr_simtemp_threshold_mc.attr,
+	&dev_attr_simtemp_mode.attr,
+	&dev_attr_simtemp_stats.attr,
+	NULL,
+};
+
+ATTRIBUTE_GROUPS(simtemp_sensor);
+
 /* Called when matched platform device is found */
 int simtemp_platform_driver_probe(struct platform_device *pdev)
 {
 	int ret;
-
 	simtemp_plat_data_t *pdata;
+
 	/* Device private data ptr */
 	simtemp_dev_priv_data_t *dev_data;
 
@@ -266,9 +288,6 @@ int simtemp_platform_driver_probe(struct platform_device *pdev)
 	pr_info("Device threshold_mC = %d\n", dev_data->pdata.threshold_mC);
 	pr_info("Device mode = %d\n", dev_data->pdata.mode);
 
-	/* Save the device data in the platform device structure */
-	dev_set_drvdata(&pdev->dev, dev_data);
-
 	/* Dynamically allocate memory using for the buffer */
 	dev_data->buffer =
 		devm_kzalloc(&pdev->dev, sizeof(*dev_data->buffer), GFP_KERNEL);
@@ -288,6 +307,9 @@ int simtemp_platform_driver_probe(struct platform_device *pdev)
 	dev_data->class_simtemp = simtemp_drv_data.class_simtemp;
 	dev_data->dev_num = simtemp_drv_data.device_num_base + pdev->id;
 
+	/* Save the device data in the platform device structure */
+	dev_set_drvdata(&pdev->dev, dev_data);
+
 	/* Do cdev init and cdev add */
 	cdev_init(&dev_data->cdev, &simtemp_fops);
 
@@ -298,9 +320,10 @@ int simtemp_platform_driver_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	/* Create device file for the detected platform device */
-	dev_data->device_simtemp = device_create(
+	/* Create device file and sysfs attributes */
+	dev_data->device_simtemp = device_create_with_groups(
 		dev_data->class_simtemp, NULL, dev_data->dev_num, NULL,
+		simtemp_sensor_groups,
 		(pdev->id == 0) ? "simtemp" : "simtemp-%d", pdev->id);
 	if (IS_ERR(dev_data->device_simtemp)) {
 		pr_err("Device create failed\n");
@@ -308,6 +331,8 @@ int simtemp_platform_driver_probe(struct platform_device *pdev)
 		cdev_del(&dev_data->cdev);
 		return ret;
 	}
+	/* Save the device data in the class device structure */
+	dev_set_drvdata(dev_data->device_simtemp, dev_data);
 
 	/* Initialize the work queue for periodic callback */
 	INIT_DELAYED_WORK(&dev_data->d_work, simtemp_work_handler);
