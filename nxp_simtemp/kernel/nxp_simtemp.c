@@ -226,7 +226,6 @@ static void simtemp_work_handler(struct work_struct *work)
 	/* Get device's private data structure */
 	simtemp_dev_priv_data_t *p_dev_data;
 	p_dev_data = container_of(d_work, simtemp_dev_priv_data_t, d_work);
-	struct device *plat_dev = p_dev_data->device_simtemp->parent;
 
 	/* Locking control data */
 	mutex_lock(&p_dev_data->config_mutex);
