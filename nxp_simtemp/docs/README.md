@@ -136,3 +136,11 @@ Roberto Carreon
 ## License
 
 GPL
+
+## Repository
+
+Source code and project resources are available on GitHub:
+https://github.com/devrcar/ldd-nxp.git
+
+Drimer demo video:
+https://drive.google.com/file/d/1bQCeVYDt38xgN79Qd0WfaTGJj0jm5kp7/view?usp=sharing
