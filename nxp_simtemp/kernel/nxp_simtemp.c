@@ -97,6 +97,8 @@ ssize_t simtemp_read(struct file *filp, char __user *buff, size_t count,
 	if (copy_to_user(buff, &sample, sizeof(sample))) {
 		return -EFAULT;
 	}
+	dev_info(plat_dev, "Read succeded: timestamp_ns=%llu, temp_mC=%d\n",
+		 sample.timestamp_ns, sample.temp_mC);
 
 	return sizeof(sample);
 }
@@ -250,8 +252,6 @@ static void simtemp_work_handler(struct work_struct *work)
 	sample.temp_mC = new_temp;
 	sample.flags = new_flags;
 
-	dev_info(plat_dev, "Save triggered: timestamp_ns=%llu, temp_mC=%d\n",
-		 sample.timestamp_ns, sample.temp_mC);
 	/* Locking consumer data */
 	mutex_lock(&p_dev_data->data_mutex);
 	rb_put(p_dev_data->buffer, &sample);
@@ -265,16 +265,16 @@ static void simtemp_work_handler(struct work_struct *work)
 }
 
 /* Sysfs attributes */
-static DEVICE_ATTR_RW(simtemp_sampling_ms);
-static DEVICE_ATTR_RW(simtemp_threshold_mc);
-static DEVICE_ATTR_RW(simtemp_mode);
-static DEVICE_ATTR_RO(simtemp_stats);
+static DEVICE_ATTR_RW(sampling_ms);
+static DEVICE_ATTR_RW(threshold_mc);
+static DEVICE_ATTR_RW(mode);
+static DEVICE_ATTR_RO(stats);
 
 static struct attribute *simtemp_sensor_attrs[] = {
-	&dev_attr_simtemp_sampling_ms.attr,
-	&dev_attr_simtemp_threshold_mc.attr,
-	&dev_attr_simtemp_mode.attr,
-	&dev_attr_simtemp_stats.attr,
+	&dev_attr_sampling_ms.attr,
+	&dev_attr_threshold_mc.attr,
+	&dev_attr_mode.attr,
+	&dev_attr_stats.attr,
 	NULL,
 };
 

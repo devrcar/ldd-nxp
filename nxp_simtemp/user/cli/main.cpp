@@ -14,8 +14,6 @@
 
 #define DEVICE_FILE "/dev/simtemp"
 
-#define POLL_TEST
-
 #define SIMTEMP_EVT_NEW 0x0001
 #define SIMTEMP_EVT_THRS 0x0002
 
@@ -79,10 +77,8 @@ int process_read(int fd, bool is_blocking, simtemp_sample_t *sample) {
 }
 
 int main() {
-    #ifdef POLL_TEST
     struct pollfd pfd;
     constexpr static int POLL_TIMEOUT = 5000;
-    #endif
     int ret;
     int fd;
     simtemp_sample_t temp_sample;
@@ -102,13 +98,10 @@ int main() {
 
     std::cout << "Device " << DEVICE_FILE << " open successfully\n";
 
-    #ifdef POLL_TEST
     pfd.fd = fd;
     pfd.events = ( POLLIN | POLLRDNORM | POLLPRI );
-    #endif
 
     while(true) {
-        #ifdef POLL_TEST
         std::cout << "\nStarting poll (" << POLL_TIMEOUT << " msec timeout)...\n";
         ret = poll(&pfd,1,POLL_TIMEOUT);
         if (ret < 0) {
@@ -130,16 +123,6 @@ int main() {
                 return EXIT_FAILURE;
             }
         }
-        #else
-        ret = process_read(fd, is_blocking, &temp_sample);
-        if (ret) {
-            close(fd);
-            return EXIT_FAILURE;
-        }
-        if (!is_blocking) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        }
-        #endif
     }
 
     close(fd);

@@ -1,7 +1,7 @@
 #include "nxp_simtemp_sysfs_iface.h"
 #include "nxp_simtemp.h"
 
-ssize_t simtemp_sampling_ms_show(struct device *dev,
+ssize_t sampling_ms_show(struct device *dev,
 				 struct device_attribute *attr, char *buf)
 {
 	int ret;
@@ -21,7 +21,7 @@ ssize_t simtemp_sampling_ms_show(struct device *dev,
 	return ret;
 }
 
-ssize_t simtemp_sampling_ms_store(struct device *dev,
+ssize_t sampling_ms_store(struct device *dev,
 				  struct device_attribute *attr,
 				  const char *buf, size_t count)
 {
@@ -57,7 +57,7 @@ ssize_t simtemp_sampling_ms_store(struct device *dev,
 	return count;
 }
 
-ssize_t simtemp_threshold_mc_show(struct device *dev,
+ssize_t threshold_mc_show(struct device *dev,
 				  struct device_attribute *attr, char *buf)
 {
 	int ret;
@@ -77,7 +77,7 @@ ssize_t simtemp_threshold_mc_show(struct device *dev,
 	return ret;
 }
 
-ssize_t simtemp_threshold_mc_store(struct device *dev,
+ssize_t threshold_mc_store(struct device *dev,
 				   struct device_attribute *attr,
 				   const char *buf, size_t count)
 {
@@ -109,7 +109,7 @@ static const char *mode_strings[] = {
 	[SIMTEMP_MODE_RAMP] = "ramp",
 };
 
-ssize_t simtemp_mode_show(struct device *dev, struct device_attribute *attr,
+ssize_t mode_show(struct device *dev, struct device_attribute *attr,
 			  char *buf)
 {
 	int ret;
@@ -130,7 +130,7 @@ ssize_t simtemp_mode_show(struct device *dev, struct device_attribute *attr,
 	return ret;
 }
 
-ssize_t simtemp_mode_store(struct device *dev, struct device_attribute *attr,
+ssize_t mode_store(struct device *dev, struct device_attribute *attr,
 			   const char *buf, size_t count)
 {
 	int index;
@@ -163,7 +163,7 @@ ssize_t simtemp_mode_store(struct device *dev, struct device_attribute *attr,
 	return count;
 }
 
-ssize_t simtemp_stats_show(struct device *dev, struct device_attribute *attr,
+ssize_t stats_show(struct device *dev, struct device_attribute *attr,
 			   char *buf)
 {
 	int ret;

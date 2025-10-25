@@ -15,7 +15,7 @@ void simtemp_dev_release(struct device *dev)
 
 /* Create platform data */
 simtemp_plat_data_t simtemp_pdata[] = {
-	{ .sampling_ms = 1000, .threshold_mC = 25100, .mode = SIMTEMP_MODE_NOISY }
+	{ .sampling_ms = 1000, .threshold_mC = 25100, .mode = SIMTEMP_MODE_NORMAL }
 };
 
 /* Create platform device */
