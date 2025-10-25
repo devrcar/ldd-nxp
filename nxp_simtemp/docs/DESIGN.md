@@ -1,57 +1,7 @@
 # Design
 
 ## Block Diagram
-
-flowchart LR
-  subgraph KERNEL["Kernel side"]
-    direction TB
-
-    PROD["Producer (workqueue)
-- Generate simulated temperature sample
-- Uses config mutex for control props
-- Push to ring buffer (data mutex)
-- Wake consumers via wait queue"]:::box
-
-    SYSC["Syscalls
-- read/poll used by consumers
-- Fetch from ring buffer
-- Sleep based on O_NONBLOCK & data readiness"]:::box
-
-    SYSFS["sysfs
-- Control interface for user space
-- Protected by config mutex
-- Attached to class device (child of platform device)"]:::box
-
-    DT["Device Tree (DT)
-- Access platform data via binding
-- Provide match table; on match, read node properties"]:::box
-  end
-
-  subgraph USER["User space"]
-    direction TB
-    CONS["Consumer (C++/Python)
-- Read char device (/dev/simtemp)
-- Poll + read (or just read)
-- Poll waits for high-priority events (e.g., abnormal temp)"]:::box
-
-    CONF["Configurer
-- Control driver via sysfs
-- Use standard tools: echo, cat"]:::box
-  end
-
-  %% Data/control paths
-  PROD -->|"samples"| SYSC
-  SYSC -->|"wakeups via waitqueue"| CONS
-  CONS -->|"read/poll on /dev/simtemp"| SYSC
-  CONF -->|"echo/cat sysfs attrs"| SYSFS
-
-  DT -->|"platform data (OF match, props)"| KERNEL
-  SYSFS -->|"updates config"| PROD
-
-  %% Styling
-  classDef box fill:#0b74de11,stroke:#0b74de,stroke-width:1px,color:#0b1f33;
-  classDef group fill:#cccccc22,stroke:#888,stroke-width:1px,color:#222;
-  class KERNEL,USER group;
+![Block Diagram](images/block_diagram.png)
 
 ## Description
 
