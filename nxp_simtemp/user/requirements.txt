@@ -1,0 +1,6 @@
+# External Python package dependencies for the GUI
+matplotlib>=3.0.0
+
+# Note: `tkinter` is part of the Python standard library but on some Linux
+# distributions it is packaged separately (e.g. `python3-tk`). Install that
+# with your package manager if the GUI fails to start.
