@@ -26,6 +26,8 @@ cd scripts
 Requirements:
 - Linux kernel headers
 - Build tools (make, gcc)
+- python3 (pip)
+- python3-venv (venv module for python3)
 
 ## Loading the Driver
 
@@ -43,24 +45,34 @@ sudo insmod kernel/simtemp.ko
 
 ## Run demo script
 
-To simplify loading the driver and exercising the user CLI, a helper script is provided at `scripts/run_demo.sh`.
+To simplify loading the driver and exercising the user CLI/GUI, a helper script is provided at `scripts/run_demo.sh`.
 
 What it does:
+
 - Inserts the `simtemp` driver module (and, if needed, the `local_device_setup` module that registers a platform device).
 - Waits for the device to appear at `/sys/class/simtemp/simtemp`.
 - Configures reasonable defaults via the sysfs attributes (`sampling_ms`, `threshold_mc`, `mode`).
-- Runs the CLI test mode (`user/cli/main.py --test`) and reports success/failure.
+- Launches either the CLI or the GUI depending on the argument (see Usage below).
 - Cleans up modules it inserted when finished.
 
 Usage:
 
 ```bash
 cd scripts
-bash ./run_demo.sh
+# run the CLI test (default)
+./run_demo.sh --cli
+
+# launch the GUI application (will try to use the project's venv)
+./run_demo.sh --gui
 ```
 
+GUI behavior notes:
+
+- The script will look for a Python virtual environment at `user/.venv` and execute the GUI from there so installed Python packages (for example `matplotlib`) are available.
+
 Notes:
-- The script will `sudo` where necessary to insert/remove kernel modules and to run the CLI (which may need access to `/dev/simtemp`).
+
+- The script will `sudo` where necessary to insert/remove kernel modules and to launch the CLI/GUI (which may need access to `/dev/simtemp` and the sysfs attributes).
 - Ensure the modules are built (see "Building" above) so `kernel/simtemp.ko` and `kernel/local_device_setup.ko` exist before running the script.
 
 ## Features
@@ -142,5 +154,8 @@ GPL
 Source code and project resources are available on GitHub:
 https://github.com/devrcar/ldd-nxp.git
 
-Drimer demo video:
+Driver demo video:
 https://drive.google.com/file/d/1bQCeVYDt38xgN79Qd0WfaTGJj0jm5kp7/view?usp=sharing
+
+Driver GUI video:
+https://drive.google.com/file/d/1lY8hJbapfbY0C15zp-CQLZPazx8UEUoS/view?usp=sharing
