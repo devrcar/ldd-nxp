@@ -68,4 +68,7 @@ typedef struct simtemp_dev_priv_data {
 	struct device *device_simtemp;
 } simtemp_dev_priv_data_t;
 
+/* remove platform function for Kernel compatibility */
+void simtemp_platform_driver_remove_impl(struct platform_device *pdev);
+
 #endif

@@ -2,6 +2,7 @@
 #include "ring_buff_helper.h"
 #include "nxp_simtemp_sysfs_iface.h"
 #include "nxp_simtemp_dt_helper.h"
+#include "compat.h"
 #include <linux/cdev.h>
 #include <linux/device.h>
 #include <linux/module.h>
@@ -390,7 +391,7 @@ int simtemp_platform_driver_probe(struct platform_device *pdev)
 }
 
 /* Called when the device is removed from the system */
-void simtemp_platform_driver_remove(struct platform_device *pdev)
+void simtemp_platform_driver_remove_impl(struct platform_device *pdev)
 {
 	simtemp_dev_priv_data_t *dev_data = dev_get_drvdata(&pdev->dev);
 
@@ -417,7 +418,7 @@ MODULE_DEVICE_TABLE(of, simtemp_dt_match);
 
 static struct platform_driver simtemp_platform_driver = {
 	.probe = simtemp_platform_driver_probe,
-	.remove = simtemp_platform_driver_remove,
+	.remove = SIMTEMP_PLATFORM_REMOVE, /* used for kernel compatibility */
 	.driver = { .name = "simtemp",
 		    .of_match_table = of_match_ptr(simtemp_dt_match) }
 };

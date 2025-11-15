@@ -26,7 +26,7 @@ simtemp_plat_data_t *simtemp_dev_get_platdata_from_dt(struct device *dev)
 		pdata->sampling_ms = SIMTEMP_DEFAULT_SAMPLING_MS;
 	}
 
-	if (of_property_read_s32(np, "nxp,threshold_mC",
+	if (of_property_read_s32(np, "nxp,threshold-mC",
 				 &pdata->threshold_mC)) {
 		dev_warn(dev,
 			 "Missing threshold_mC property (using default)\n");
